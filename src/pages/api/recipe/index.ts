@@ -1,49 +1,96 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { PrismaClient } = require("@prisma/client");
 import { NextApiRequest, NextApiResponse } from "next";
+import { PrismaClient } from "@prisma/client";
 
-/**
- *
- *
- */
+const prisma = new PrismaClient();
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  const prisma = new PrismaClient();
-
-  const userId = req.headers["user-id"]; // Example: Get the user ID from headers or session
-
-  if (!userId) {
-    return res.status(400).json({ message: "User ID is required" });
-  }
-
   try {
-    // Query the recipes based on the logged-in userId
-    const recipes = await prisma.recipe.findMany({
-      where: {
-        userId: userId, // Only fetch recipes belonging to the logged-in user
-      },
-      include: {
-        ingredients: {
-          include: {
-            ingredient: true, // Include ingredient details for each recipe ingredient
+    if (req.method === "GET") {
+      const { includeIngredients, includeSteps } = req.query;
+      const userId = req.query["userId"] as string;
+
+      handleAuth(userId, res);
+
+      // Get all recipes for the logged-in user
+      const recipes = await prisma.recipe.findMany({
+        where: { userId },
+        include: {
+          ingredients:
+            includeIngredients === "true"
+              ? { include: { ingredient: true } }
+              : false,
+          steps: includeSteps === "true" ? true : false,
+        },
+      });
+      return res.status(200).json({ recipes });
+    }
+
+    if (req.method === "POST") {
+      const userId = req.query["userId"] as string;
+
+      // Create a new recipe
+      const { title, description, imageUrl, ingredients, steps } = req.body;
+      handleAuth(userId, res);
+
+      const recipe = await prisma.recipe.create({
+        data: {
+          title,
+          description,
+          imageUrl,
+          userId,
+          ingredients: {
+            create: ingredients?.map(
+              (ing: { name: string; quantity: string }) => ({
+                quantity: ing.quantity,
+                ingredient: {
+                  connectOrCreate: {
+                    where: { name: ing.name },
+                    create: { name: ing.name },
+                  },
+                },
+              })
+            ),
+          },
+          steps: {
+            create: steps?.map(
+              (step: { order: number; instruction: string }) => ({
+                order: step.order,
+                instruction: step.instruction,
+              })
+            ),
           },
         },
-        steps: true, // Include steps for each recipe
-      },
-    });
+        include: {
+          ingredients: { include: { ingredient: true } },
+          steps: true,
+        },
+      });
 
-    // Return the recipes and their related data
-    return res.status(200).json({ recipes });
+      return res.status(201).json({ recipe });
+    }
+
+    res.status(405).json({ message: "Method Not Allowed" });
   } catch (error) {
-    console.error("Error fetching recipes:", error);
+    console.error(error);
     return (
       res
         .status(500)
-        //@ts-expect-error
-        .json({ message: "Error fetching recipes", error: error.message })
+        //@ts-expect-error no idea why TS is going this dumb stuff
+        .json({ message: "Internal Server Error", error: error.message })
     );
+  }
+}
+
+function handleAuth(
+  userId: string | undefined | string[],
+  res: NextApiResponse
+) {
+  if (!userId || typeof userId !== "string") {
+    return res
+      .status(401)
+      .json({ message: "Unauthorized: User ID is required" });
   }
 }
